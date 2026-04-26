@@ -1,5 +1,7 @@
 # secrets — never commit
 .env
+.env.local
+.env.*.local
 
 # reference files
 *.pdf
@@ -8,3 +10,34 @@
 .playwright-mcp/
 test_person.png
 test_clothing.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# node (if ever added)
+node_modules/
+npm-debug.log*
