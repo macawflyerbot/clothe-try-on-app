@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Virtual Try-On</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { background-color: #030712; }
+    .shimmer-bg {
+      background: linear-gradient(90deg, #1f2937 25%, #374151 50%, #1f2937 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.8s infinite;
+    }
+    @keyframes shimmer {
+      0%   { background-position: -200% 0; }
+      100% { background-position:  200% 0; }
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .spin { animation: spin 1s linear infinite; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useCallback } = React;
+
+    /* ── Inline SVG Icons ─────────────────────────────────────────────────── */
+    const Icon = ({ d, size = 16, className = '', strokeWidth = 2, viewBox = '0 0 24 24' }) => (
+      <svg width={size} height={size} viewBox={viewBox} fill="none"
+        stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round"
+        strokeLinejoin="round" className={className}>
+        {Array.isArray(d)
+          ? d.map((p, i) => <path key={i} d={p} />)
+          : <path d={d} />}
+      </svg>
+    );
+
+    const IconUpload    = (p) => <Icon {...p} d={["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M17 8l-5-5-5 5","M12 3v12"]} />;
+    const IconRefreshCw = (p) => <Icon {...p} d={["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8","M21 3v5h-5","M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16","M8 16H3v5"]} />;
+    const IconLoader    = (p) => <Icon {...p} className={`spin${p.className ? ' '+p.className : ''}`} d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />;
+    const IconAlert     = (p) => <Icon {...p} d={["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"]} />;
+    const IconImage     = (p) => <Icon {...p} d={["M21 15l-5-5L5 20","rect x='3' y='3' width='18' height='18' rx='2' ry='2'", "M8.5 8.5 a.5.5 0 1 0 1 0 a.5.5 0 1 0-1 0"]}
+      // Use a custom render for rect + circle + path
+    />;
+    const IconImageCustom = ({ size = 16, className = '' }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth={2} strokeLinecap="round"
+        strokeLinejoin="round" className={className}>
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+        <circle cx="8.5" cy="8.5" r="1.5"/>
+        <polyline points="21 15 16 10 5 21"/>
+      </svg>
+    );
+    const IconCheck     = (p) => <Icon {...p} d="M20 6L9 17l-5-5" />;
+    const IconDownload  = (p) => <Icon {...p} d={["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3"]} />;
+    const IconWand      = (p) => <Icon {...p} d={["M15 4V2","M15 16v-2","M8 9h2","M20 9h2","M17.8 11.8L19 13","M15 9h.01","M17.8 6.2L19 5","M3 21l9-9","M12.2 6.2L11 5"]} />;
+    const IconRotate    = (p) => <Icon {...p} d={["M1 4v6h6","M3.51 15a9 9 0 1 0 .49-4.95"]} />;
+    const IconShirt     = ({ size = 16, className = '' }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth={2} strokeLinecap="round"
+        strokeLinejoin="round" className={className}>
+        <path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.57a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.57a2 2 0 0 0-1.34-2.23z"/>
+      </svg>
+    );
+
+    /* ── DropZone ─────────────────────────────────────────────────────────── */
+    function DropZone({ label, sublabel, previewUrl, onFile }) {
+      const [isDragging, setIsDragging] = useState(false);
+      const inputRef = useRef(null);
+
+      const processFile = useCallback((file) => {
+        if (file && file.type.startsWith('image/')) onFile(file);
+      }, [onFile]);
+
+      const handleDragOver  = (e) => { e.preventDefault(); setIsDragging(true); };
+      const handleDragEnter = (e) => { e.preventDefault(); setIsDragging(true); };
+      const handleDragLeave = (e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) setIsDragging(false);
+      };
+      const handleDrop = (e) => {
+        e.preventDefault(); setIsDragging(false);
+        processFile(e.dataTransfer.files[0]);
+      };
+      const handleClick    = () => inputRef.current && inputRef.current.click();
+      const handleKeyDown  = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(); } };
+      const handleChange   = (e) => { processFile(e.target.files[0]); e.target.value = ''; };
+
+      const base = "relative rounded-2xl aspect-[4/3] cursor-pointer select-none transition-all duration-200 overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500";
+
+      if (previewUrl) {
+        return (
+          <div className={base + " group"} onClick={handleClick} onKeyDown={handleKeyDown} role="button" tabIndex={0} aria-label={"Change " + label}>
+            <img src={previewUrl} alt={label} className="w-full h-full object-cover" />
+            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center gap-2">
+              <IconRefreshCw size={22} className="text-white" />
+              <span className="text-sm text-white font-medium">Change image</span>
+            </div>
+            <div className="absolute top-3 left-3 bg-black/50 backdrop-blur-sm rounded-full px-2.5 py-1 text-xs text-gray-200 font-medium">{sublabel}</div>
+            <div className="absolute top-3 right-3 bg-green-500 rounded-full p-1.5 shadow-lg">
+              <IconCheck size={12} className="text-white" strokeWidth={3} />
+            </div>
+            <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={handleChange} aria-label={"Upload " + label} />
+          </div>
+        );
+      }
+
+      return (
+        <div
+          className={base + " border-2 border-dashed flex flex-col items-center justify-center gap-3 " + (isDragging ? "border-indigo-400 bg-indigo-950/40 ring-2 ring-indigo-500/20" : "border-gray-700 bg-gray-900 hover:border-indigo-500/70 hover:bg-gray-800/60")}
+          onClick={handleClick} onDragOver={handleDragOver} onDragEnter={handleDragEnter}
+          onDragLeave={handleDragLeave} onDrop={handleDrop} onKeyDown={handleKeyDown}
+          role="button" tabIndex={0} aria-label={"Upload " + label}
+        >
+          <div className={"w-14 h-14 rounded-2xl flex items-center justify-center transition-colors duration-200 " + (isDragging ? "bg-indigo-500/20" : "bg-gray-800")}>
+            <IconUpload size={24} className={"transition-colors duration-200 " + (isDragging ? "text-indigo-400" : "text-gray-500")} />
+          </div>
+          <div className="text-center px-4">
+            <p className={"text-sm font-semibold mb-1 transition-colors duration-200 " + (isDragging ? "text-indigo-300" : "text-gray-300")}>{label}</p>
+            <p className="text-xs text-gray-500">{isDragging ? "Drop to upload" : "Drag & drop or click to browse"}</p>
+            <p className="text-xs text-gray-700 mt-1">JPG · PNG · WEBP</p>
+          </div>
+          <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={handleChange} aria-label={"Upload " + label} />
+        </div>
+      );
+    }
+
+    /* ── OutputSection ────────────────────────────────────────────────────── */
+    function OutputSection({ isLoading, resultImage, error, onReset, onImgError }) {
+      if (isLoading) {
+        return (
+          <div className="relative rounded-2xl overflow-hidden min-h-[340px] flex items-center justify-center" aria-live="polite" aria-busy="true">
+            <div className="absolute inset-0 shimmer-bg" />
+            <div className="relative z-10 flex flex-col items-center gap-4">
+              <div className="w-16 h-16 rounded-full bg-gray-900/80 backdrop-blur-sm flex items-center justify-center shadow-xl">
+                <IconLoader size={32} className="text-indigo-400" />
+              </div>
+              <div className="text-center">
+                <p className="text-sm font-semibold text-gray-200">Generating your try-on…</p>
+                <p className="text-xs text-gray-400 mt-1">This may take a few seconds</p>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      if (error) {
+        return (
+          <div className="rounded-2xl border border-red-500/20 bg-gray-900 min-h-[340px] flex items-center justify-center" role="alert">
+            <div className="flex flex-col items-center gap-4 p-12 text-center max-w-sm">
+              <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center">
+                <IconAlert size={26} className="text-red-400" />
+              </div>
+              <div>
+                <p className="text-red-400 font-semibold text-sm mb-1.5">Generation failed</p>
+                <p className="text-gray-400 text-xs leading-relaxed">{error}</p>
+              </div>
+              <button onClick={onReset} className="mt-1 flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors underline underline-offset-2">
+                <IconRotate size={12} />
+                Reset and try again
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      if (resultImage) {
+        return (
+          <div className="rounded-2xl border border-gray-800 bg-gray-900 overflow-hidden">
+            <div className="relative group">
+              <img src={resultImage} alt="AI-generated virtual try-on result" className="w-full max-h-[640px] object-contain" onError={onImgError} />
+              <a href={resultImage} download="tryon-result.jpg"
+                className="absolute bottom-4 right-4 bg-black/70 backdrop-blur-sm hover:bg-black/90 text-white text-xs font-medium px-3 py-2 rounded-lg flex items-center gap-1.5 transition-all opacity-0 group-hover:opacity-100 shadow-lg">
+                <IconDownload size={13} />
+                Save image
+              </a>
+            </div>
+            <div className="px-5 py-3 border-t border-gray-800 flex items-center justify-between">
+              <span className="text-xs text-gray-500">Try-on result generated successfully</span>
+              <button onClick={onReset} className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                <IconRotate size={12} />
+                New try-on
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="rounded-2xl border border-dashed border-gray-800 bg-gray-900/50 min-h-[340px] flex items-center justify-center" aria-live="polite">
+          <div className="flex flex-col items-center gap-4 p-12 text-center">
+            <div className="w-16 h-16 rounded-2xl bg-gray-800 flex items-center justify-center">
+              <IconImageCustom size={28} className="text-gray-600" />
+            </div>
+            <div>
+              <p className="text-gray-400 text-sm font-medium mb-1">Your result will appear here</p>
+              <p className="text-gray-600 text-xs">Upload both images and click Generate</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    /* ── App ──────────────────────────────────────────────────────────────── */
+    function App() {
+      const [image1,      setImage1]      = useState(null);
+      const [image2,      setImage2]      = useState(null);
+      const [preview1,    setPreview1]    = useState(null);
+      const [preview2,    setPreview2]    = useState(null);
+      const [isLoading,   setIsLoading]   = useState(false);
+      const [resultImage, setResultImage] = useState(null);
+      const [error,       setError]       = useState(null);
+
+      const canGenerate = image1 !== null && image2 !== null && !isLoading;
+
+      const handleFile1 = useCallback((file) => {
+        if (preview1) URL.revokeObjectURL(preview1);
+        setImage1(file); setPreview1(URL.createObjectURL(file));
+      }, [preview1]);
+
+      const handleFile2 = useCallback((file) => {
+        if (preview2) URL.revokeObjectURL(preview2);
+        setImage2(file); setPreview2(URL.createObjectURL(file));
+      }, [preview2]);
+
+      const handleReset = useCallback(() => {
+        if (preview1)    URL.revokeObjectURL(preview1);
+        if (preview2)    URL.revokeObjectURL(preview2);
+        if (resultImage) URL.revokeObjectURL(resultImage);
+        setImage1(null); setImage2(null);
+        setPreview1(null); setPreview2(null);
+        setResultImage(null); setError(null); setIsLoading(false);
+      }, [preview1, preview2, resultImage]);
+
+      const handleImgError = useCallback(() => {
+        setError('The server returned an invalid image. Please try again.');
+        if (resultImage) URL.revokeObjectURL(resultImage);
+        setResultImage(null);
+      }, [resultImage]);
+
+      const handleGenerate = async () => {
+        setIsLoading(true); setError(null);
+        if (resultImage) URL.revokeObjectURL(resultImage);
+        setResultImage(null);
+
+        const formData = new FormData();
+        formData.append('image1', image1);
+        formData.append('image2', image2);
+
+        try {
+          const response = await fetch(
+            'https://macawflyer.app.n8n.cloud/webhook/5c381939-3482-47fe-9d73-8706160652cd',
+            { method: 'POST', body: formData }
+          );
+          if (!response.ok) throw new Error('Server error: ' + response.status + ' ' + response.statusText);
+          const blob = await response.blob();
+          setResultImage(URL.createObjectURL(blob));
+        } catch (err) {
+          setError(err.name === 'TypeError'
+            ? 'Network error: could not reach the server. Check your connection or CORS settings.'
+            : (err.message || 'An unexpected error occurred.'));
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+
+          <header className="border-b border-gray-800/80 px-6 py-4 flex items-center gap-3 backdrop-blur-sm sticky top-0 z-10 bg-gray-950/90">
+            <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
+              <IconShirt size={18} className="text-white" />
+            </div>
+            <h1 className="text-base font-semibold tracking-tight">Virtual Try-On</h1>
+            <span className="ml-auto text-xs text-gray-600 font-medium tracking-wide uppercase">AI-Powered</span>
+          </header>
+
+          <main className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-10 flex flex-col gap-8">
+
+            <section>
+              <div className="flex items-center gap-2 mb-5">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Step 1</span>
+                <span className="flex-1 h-px bg-gray-800" />
+                <span className="text-xs text-gray-600">Upload two images</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                <div>
+                  <p className="text-xs font-medium text-gray-400 mb-2.5 flex items-center gap-1.5">
+                    <span className="inline-flex w-4 h-4 rounded-full bg-indigo-600 items-center justify-center text-[10px] font-bold text-white">1</span>
+                    Person Photo
+                  </p>
+                  <DropZone label="Image 1 (Person)" sublabel="Person" previewUrl={preview1} onFile={handleFile1} />
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-gray-400 mb-2.5 flex items-center gap-1.5">
+                    <span className="inline-flex w-4 h-4 rounded-full bg-indigo-600 items-center justify-center text-[10px] font-bold text-white">2</span>
+                    Clothing Item
+                  </p>
+                  <DropZone label="Image 2 (Clothing)" sublabel="Clothing" previewUrl={preview2} onFile={handleFile2} />
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <div className="flex items-center gap-2 mb-5">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Step 2</span>
+                <span className="flex-1 h-px bg-gray-800" />
+                <span className="text-xs text-gray-600">Generate the result</span>
+              </div>
+              <div className="flex flex-col items-center gap-3">
+                <button
+                  disabled={!canGenerate}
+                  onClick={handleGenerate}
+                  className={"px-10 py-3.5 rounded-xl font-semibold text-sm tracking-wide flex items-center gap-2.5 transition-all duration-200 " + (canGenerate ? "bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 shadow-lg shadow-indigo-500/25 cursor-pointer" : "bg-indigo-600/30 text-white/40 cursor-not-allowed")}
+                >
+                  {isLoading
+                    ? <><IconLoader size={16} className="text-white" /> Generating…</>
+                    : <><IconWand size={16} /> Generate Try-On</>
+                  }
+                </button>
+                {!canGenerate && !isLoading && (
+                  <p className="text-xs text-gray-600">
+                    {!image1 && !image2 ? 'Upload both images to continue' : !image1 ? 'Upload a person photo to continue' : 'Upload a clothing image to continue'}
+                  </p>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <div className="flex items-center gap-2 mb-5">
+                <span className="text-xs font-semibold text-gray-500 uppercase tracking-widest">Step 3</span>
+                <span className="flex-1 h-px bg-gray-800" />
+                <span className="text-xs text-gray-600">View your result</span>
+              </div>
+              <OutputSection isLoading={isLoading} resultImage={resultImage} error={error} onReset={handleReset} onImgError={handleImgError} />
+            </section>
+
+          </main>
+
+          <footer className="border-t border-gray-800/60 px-6 py-4 text-center">
+            <p className="text-xs text-gray-700">Virtual Try-On · Powered by AI</p>
+          </footer>
+
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
