@@ -245,7 +245,15 @@
         setResultImage(null);
       }, [resultImage]);
 
+      const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB per image
+
       const handleGenerate = async () => {
+        // Client-side size guard before sending anything
+        if (image1.size > MAX_FILE_BYTES || image2.size > MAX_FILE_BYTES) {
+          setError('Each image must be under 10 MB.');
+          return;
+        }
+
         setIsLoading(true); setError(null);
         if (resultImage) URL.revokeObjectURL(resultImage);
         setResultImage(null);
@@ -255,16 +263,17 @@
         formData.append('image2', image2);
 
         try {
-          const response = await fetch(
-            'https://macawflyer.app.n8n.cloud/webhook/5c381939-3482-47fe-9d73-8706160652cd',
-            { method: 'POST', body: formData }
-          );
-          if (!response.ok) throw new Error('Server error: ' + response.status + ' ' + response.statusText);
+          const response = await fetch('/generate', { method: 'POST', body: formData });
+          if (!response.ok) {
+            let msg = 'Server error: ' + response.status;
+            try { const j = await response.json(); msg = j.error || msg; } catch (_) {}
+            throw new Error(msg);
+          }
           const blob = await response.blob();
           setResultImage(URL.createObjectURL(blob));
         } catch (err) {
           setError(err.name === 'TypeError'
-            ? 'Network error: could not reach the server. Check your connection or CORS settings.'
+            ? 'Could not reach the local server. Make sure server.py is running.'
             : (err.message || 'An unexpected error occurred.'));
         } finally {
           setIsLoading(false);
