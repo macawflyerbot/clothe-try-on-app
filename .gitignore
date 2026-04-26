@@ -1,6 +1,9 @@
 # secrets — never commit
 .env
 
+# reference files
+*.pdf
+
 # test artifacts
 .playwright-mcp/
 test_person.png
