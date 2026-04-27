@@ -8,6 +8,7 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <style>
     body { background-color: #030712; }
     .shimmer-bg {
@@ -30,7 +31,11 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useRef, useCallback } = React;
+    const { useState, useRef, useCallback, useEffect } = React;
+
+    const SUPABASE_URL = 'https://ityvocotqddpwksmiztd.supabase.co';
+    const SUPABASE_ANON_KEY = 'sb_publishable_UZXc9pB33qbaNl_SlN4X8w_yQN2qR4x';
+    const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     /* ── Inline SVG Icons ─────────────────────────────────────────────────── */
     const Icon = ({ d, size = 16, className = '', strokeWidth = 2, viewBox = '0 0 24 24' }) => (
@@ -70,6 +75,126 @@
         <path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.57a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.57a2 2 0 0 0-1.34-2.23z"/>
       </svg>
     );
+
+    /* ── AuthForm ────────────────────────────────────────────────────────── */
+    function AuthForm({ view, onViewChange }) {
+      const [email,    setEmail]    = useState('');
+      const [name,     setName]     = useState('');
+      const [password, setPassword] = useState('');
+      const [loading,  setLoading]  = useState(false);
+      const [error,    setError]    = useState(null);
+      const [message,  setMessage]  = useState(null);
+
+      const isSignup = view === 'signup';
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        setError(null);
+        setMessage(null);
+        try {
+          if (isSignup) {
+            const { data, error } = await supabaseClient.auth.signUp({
+              email,
+              password,
+              options: { data: { name } }
+            });
+            if (error) throw error;
+            if (!data.session) {
+              setMessage('Account created! Check your email to confirm, then sign in.');
+            }
+          } else {
+            const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+          }
+        } catch (err) {
+          setError(err.message || 'Authentication failed. Please try again.');
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center px-4">
+          <div className="w-full max-w-sm">
+            <div className="flex flex-col items-center gap-3 mb-8">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
+                <IconShirt size={22} className="text-white" />
+              </div>
+              <div className="text-center">
+                <h1 className="text-xl font-semibold tracking-tight">Virtual Try-On</h1>
+                <p className="text-sm text-gray-500 mt-1">
+                  {isSignup ? 'Create your account' : 'Sign in to continue'}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6">
+              <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                {isSignup && (
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-medium text-gray-400" htmlFor="auth-name">Full name</label>
+                    <input
+                      id="auth-name" type="text" autoComplete="name" required={isSignup}
+                      value={name} onChange={e => setName(e.target.value)} placeholder="Your name"
+                      className="bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                    />
+                  </div>
+                )}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-medium text-gray-400" htmlFor="auth-email">Email address</label>
+                  <input
+                    id="auth-email" type="email" autoComplete="email" required
+                    value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com"
+                    className="bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-medium text-gray-400" htmlFor="auth-password">Password</label>
+                  <input
+                    id="auth-password" type="password" autoComplete={isSignup ? 'new-password' : 'current-password'} required
+                    value={password} onChange={e => setPassword(e.target.value)}
+                    placeholder={isSignup ? 'At least 6 characters' : '••••••••'}
+                    className="bg-gray-800 border border-gray-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition"
+                  />
+                </div>
+                {message && (
+                  <div className="flex items-start gap-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl px-3.5 py-2.5">
+                    <IconCheck size={14} className="text-indigo-400 mt-0.5 shrink-0" />
+                    <p className="text-xs text-indigo-300 leading-relaxed">{message}</p>
+                  </div>
+                )}
+                {error && (
+                  <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-3.5 py-2.5">
+                    <IconAlert size={14} className="text-red-400 mt-0.5 shrink-0" />
+                    <p className="text-xs text-red-400 leading-relaxed">{error}</p>
+                  </div>
+                )}
+                <button
+                  type="submit" disabled={loading}
+                  className={"mt-1 w-full py-2.5 rounded-xl font-semibold text-sm tracking-wide flex items-center justify-center gap-2 transition-all duration-200 " + (loading ? "bg-indigo-600/40 text-white/40 cursor-not-allowed" : "bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 shadow-lg shadow-indigo-500/25 cursor-pointer")}
+                >
+                  {loading
+                    ? <><IconLoader size={15} className="text-white/60" />{isSignup ? 'Creating account…' : 'Signing in…'}</>
+                    : (isSignup ? 'Create account' : 'Sign in')
+                  }
+                </button>
+              </form>
+            </div>
+
+            <p className="text-center text-xs text-gray-500 mt-5">
+              {isSignup ? 'Already have an account? ' : "Don't have an account? "}
+              <button
+                onClick={() => { onViewChange(isSignup ? 'login' : 'signup'); setError(null); setMessage(null); }}
+                className="text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
+              >
+                {isSignup ? 'Sign in' : 'Sign up'}
+              </button>
+            </p>
+          </div>
+        </div>
+      );
+    }
 
     /* ── DropZone ─────────────────────────────────────────────────────────── */
     function DropZone({ label, sublabel, previewUrl, onFile }) {
@@ -210,6 +335,10 @@
 
     /* ── App ──────────────────────────────────────────────────────────────── */
     function App() {
+      const [session,        setSession]        = useState(null);
+      const [authView,       setAuthView]       = useState('login');
+      const [sessionLoading, setSessionLoading] = useState(true);
+
       const [image1,      setImage1]      = useState(null);
       const [image2,      setImage2]      = useState(null);
       const [preview1,    setPreview1]    = useState(null);
@@ -219,6 +348,17 @@
       const [error,       setError]       = useState(null);
 
       const canGenerate = image1 !== null && image2 !== null && !isLoading;
+
+      useEffect(() => {
+        supabaseClient.auth.getSession().then(({ data: { session } }) => {
+          setSession(session);
+          setSessionLoading(false);
+        });
+        const { data: { subscription } } = supabaseClient.auth.onAuthStateChange(
+          (_event, session) => { setSession(session); }
+        );
+        return () => subscription.unsubscribe();
+      }, []);
 
       const handleFile1 = useCallback((file) => {
         if (preview1) URL.revokeObjectURL(preview1);
@@ -280,6 +420,17 @@
         }
       };
 
+      if (sessionLoading) {
+        return (
+          <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+            <IconLoader size={32} className="text-indigo-400" />
+          </div>
+        );
+      }
+      if (!session) {
+        return <AuthForm view={authView} onViewChange={setAuthView} />;
+      }
+
       return (
         <div className="min-h-screen bg-gray-950 text-white flex flex-col">
 
@@ -288,7 +439,17 @@
               <IconShirt size={18} className="text-white" />
             </div>
             <h1 className="text-base font-semibold tracking-tight">Virtual Try-On</h1>
-            <span className="ml-auto text-xs text-gray-600 font-medium tracking-wide uppercase">AI-Powered</span>
+            <div className="ml-auto flex items-center gap-3">
+              <span className="text-xs text-gray-500 font-medium hidden sm:block">
+                {session.user.user_metadata && session.user.user_metadata.name ? session.user.user_metadata.name : session.user.email}
+              </span>
+              <button
+                onClick={() => supabaseClient.auth.signOut()}
+                className="text-xs text-gray-500 hover:text-gray-300 transition-colors border border-gray-800 hover:border-gray-700 rounded-lg px-3 py-1.5 font-medium"
+              >
+                Sign out
+              </button>
+            </div>
           </header>
 
           <main className="flex-1 max-w-4xl mx-auto w-full px-4 sm:px-6 py-10 flex flex-col gap-8">
