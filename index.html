@@ -40,6 +40,12 @@
     const STRIPE_PAYMENT_LINK = 'https://buy.stripe.com/test_9B6fZhgIUgBV9S354B5EY00';
     const EDGE_FN_URL = `${SUPABASE_URL}/functions/v1`;
 
+    const PRESET_CLOTHES = [
+      { id: 'shirt',   file: '29855415_58972031_600.jpg',                             name: 'Linen Shirt'  },
+      { id: 'fedora',  file: 'before_dark_packable_unisex_fedora_-_naturalblack.jpg', name: 'Straw Fedora' },
+      { id: 'wetsuit', file: 'wetsuit.jpg',                                           name: 'Camo Wetsuit' },
+    ];
+
     /* ── Inline SVG Icons ─────────────────────────────────────────────────── */
     const Icon = ({ d, size = 16, className = '', strokeWidth = 2, viewBox = '0 0 24 24' }) => (
       <svg width={size} height={size} viewBox={viewBox} fill="none"
@@ -490,13 +496,14 @@
       const [sessionLoading,     setSessionLoading]     = useState(true);
       const [subscriptionStatus, setSubscriptionStatus] = useState(null); // null | 'active' | 'inactive'
 
-      const [image1,      setImage1]      = useState(null);
-      const [image2,      setImage2]      = useState(null);
-      const [preview1,    setPreview1]    = useState(null);
-      const [preview2,    setPreview2]    = useState(null);
-      const [isLoading,   setIsLoading]   = useState(false);
-      const [resultImage, setResultImage] = useState(null);
-      const [error,       setError]       = useState(null);
+      const [image1,         setImage1]         = useState(null);
+      const [image2,         setImage2]         = useState(null);
+      const [preview1,       setPreview1]       = useState(null);
+      const [preview2,       setPreview2]       = useState(null);
+      const [isLoading,      setIsLoading]      = useState(false);
+      const [resultImage,    setResultImage]    = useState(null);
+      const [error,          setError]          = useState(null);
+      const [selectedPreset, setSelectedPreset] = useState(null);
 
       const canGenerate = image1 !== null && image2 !== null && !isLoading;
 
@@ -536,9 +543,10 @@
         setImage1(file); setPreview1(URL.createObjectURL(file));
       }, [preview1]);
 
-      const handleFile2 = useCallback((file) => {
+      const handleFile2 = useCallback((file, fromPreset = null) => {
         if (preview2) URL.revokeObjectURL(preview2);
         setImage2(file); setPreview2(URL.createObjectURL(file));
+        setSelectedPreset(fromPreset);
       }, [preview2]);
 
       const handleReset = useCallback(() => {
@@ -548,7 +556,20 @@
         setImage1(null); setImage2(null);
         setPreview1(null); setPreview2(null);
         setResultImage(null); setError(null); setIsLoading(false);
+        setSelectedPreset(null);
       }, [preview1, preview2, resultImage]);
+
+      const handlePresetSelect = useCallback(async (preset) => {
+        try {
+          const res = await fetch(`/pics/${encodeURIComponent(preset.file)}`);
+          if (!res.ok) throw new Error('fetch failed');
+          const blob = await res.blob();
+          const file = new File([blob], preset.file, { type: blob.type });
+          handleFile2(file, preset.id);
+        } catch (_) {
+          setError('Could not load the preset image. Make sure server.py is running.');
+        }
+      }, [handleFile2]);
 
       const handleImgError = useCallback(() => {
         setError('The server returned an invalid image. Please try again.');
@@ -652,6 +673,26 @@
                     Clothing Item
                   </p>
                   <DropZone label="Image 2 (Clothing)" sublabel="Clothing" previewUrl={preview2} onFile={handleFile2} />
+                  <div className="mt-3">
+                    <p className="text-[11px] text-gray-500 mb-2 font-medium">Or pick from our collection:</p>
+                    <div className="grid grid-cols-3 gap-2">
+                      {PRESET_CLOTHES.map(preset => (
+                        <button
+                          key={preset.id}
+                          onClick={() => handlePresetSelect(preset)}
+                          className={"rounded-xl overflow-hidden border-2 transition-all duration-150 text-left " + (selectedPreset === preset.id ? "border-indigo-500 ring-2 ring-indigo-500/30" : "border-gray-700 hover:border-indigo-500/60")}
+                          title={preset.name}
+                        >
+                          <img
+                            src={`/pics/${encodeURIComponent(preset.file)}`}
+                            alt={preset.name}
+                            className="w-full aspect-square object-cover bg-gray-800"
+                          />
+                          <p className="text-[10px] text-gray-400 text-center py-1.5 px-1 truncate bg-gray-900 leading-none">{preset.name}</p>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             </section>
