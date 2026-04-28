@@ -37,6 +37,9 @@
     const SUPABASE_ANON_KEY = 'sb_publishable_UZXc9pB33qbaNl_SlN4X8w_yQN2qR4x';
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+    const STRIPE_PAYMENT_LINK = 'https://buy.stripe.com/test_9B6fZhgIUgBV9S354B5EY00';
+    const EDGE_FN_URL = `${SUPABASE_URL}/functions/v1`;
+
     /* ── Inline SVG Icons ─────────────────────────────────────────────────── */
     const Icon = ({ d, size = 16, className = '', strokeWidth = 2, viewBox = '0 0 24 24' }) => (
       <svg width={size} height={size} viewBox={viewBox} fill="none"
@@ -52,9 +55,6 @@
     const IconRefreshCw = (p) => <Icon {...p} d={["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8","M21 3v5h-5","M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16","M8 16H3v5"]} />;
     const IconLoader    = (p) => <Icon {...p} className={`spin${p.className ? ' '+p.className : ''}`} d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />;
     const IconAlert     = (p) => <Icon {...p} d={["M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z","M12 9v4","M12 17h.01"]} />;
-    const IconImage     = (p) => <Icon {...p} d={["M21 15l-5-5L5 20","rect x='3' y='3' width='18' height='18' rx='2' ry='2'", "M8.5 8.5 a.5.5 0 1 0 1 0 a.5.5 0 1 0-1 0"]}
-      // Use a custom render for rect + circle + path
-    />;
     const IconImageCustom = ({ size = 16, className = '' }) => (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
         stroke="currentColor" strokeWidth={2} strokeLinecap="round"
@@ -73,6 +73,14 @@
         stroke="currentColor" strokeWidth={2} strokeLinecap="round"
         strokeLinejoin="round" className={className}>
         <path d="M20.38 3.46L16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.57a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.57a2 2 0 0 0-1.34-2.23z"/>
+      </svg>
+    );
+    const IconCreditCard = ({ size = 16, className = '' }) => (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth={2} strokeLinecap="round"
+        strokeLinejoin="round" className={className}>
+        <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
+        <line x1="1" y1="10" x2="23" y2="10"/>
       </svg>
     );
 
@@ -189,6 +197,148 @@
                 className="text-indigo-400 hover:text-indigo-300 transition-colors font-medium"
               >
                 {isSignup ? 'Sign in' : 'Sign up'}
+              </button>
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    /* ── PaymentWall ─────────────────────────────────────────────────────── */
+    function PaymentWall({ session, onActivated }) {
+      const [activating, setActivating] = useState(false);
+      const [checking, setChecking]     = useState(false);
+      const [error, setError]           = useState(null);
+
+      const paymentUrl = `${STRIPE_PAYMENT_LINK}?client_reference_id=${session.user.id}&prefilled_email=${encodeURIComponent(session.user.email)}`;
+
+      // Called after redirect from Stripe — verifies the checkout session server-side.
+      const activate = useCallback(async (sessionId) => {
+        setActivating(true);
+        setError(null);
+        try {
+          const { data: { session: authSession } } = await supabaseClient.auth.getSession();
+          const res = await fetch(`${EDGE_FN_URL}/activate-subscription`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${authSession.access_token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ session_id: sessionId })
+          });
+          if (!res.ok) {
+            const j = await res.json().catch(() => ({}));
+            throw new Error(j.error || `Activation failed (${res.status})`);
+          }
+          onActivated();
+        } catch (err) {
+          setError(err.message);
+        } finally {
+          setActivating(false);
+        }
+      }, [onActivated]);
+
+      // Polls Supabase directly — used when the webhook may have already activated the account.
+      const pollStatus = useCallback(async () => {
+        setChecking(true);
+        setError(null);
+        try {
+          for (let i = 0; i < 6; i++) {
+            const { data } = await supabaseClient
+              .from('user_subscriptions')
+              .select('subscription_status')
+              .eq('user_id', session.user.id)
+              .single();
+            const s = data?.subscription_status;
+            if (s === 'active' || s === 'trialing') { onActivated(); return; }
+            if (i < 5) await new Promise(r => setTimeout(r, 2000));
+          }
+          setError('No active subscription found. Please complete payment first.');
+        } finally {
+          setChecking(false);
+        }
+      }, [session.user.id, onActivated]);
+
+      useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('payment_success') === 'true') {
+          window.history.replaceState({}, '', '/');
+          const sid = params.get('session_id');
+          sid ? activate(sid) : pollStatus();
+        }
+      }, [activate, pollStatus]);
+
+      const busy = activating || checking;
+
+      return (
+        <div className="min-h-screen bg-gray-950 text-white flex flex-col items-center justify-center px-4">
+          <div className="w-full max-w-sm">
+            <div className="flex flex-col items-center gap-3 mb-8">
+              <div className="w-12 h-12 rounded-2xl bg-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
+                <IconShirt size={22} className="text-white" />
+              </div>
+              <div className="text-center">
+                <h1 className="text-xl font-semibold tracking-tight">Virtual Try-On</h1>
+                <p className="text-sm text-gray-500 mt-1">Subscribe to start generating</p>
+              </div>
+            </div>
+
+            <div className="bg-gray-900 rounded-2xl border border-gray-800 p-6 flex flex-col gap-5">
+              <div className="text-center">
+                <div className="text-4xl font-bold text-white mb-1">$9.99</div>
+                <div className="text-sm text-gray-400">per month · cancel anytime</div>
+              </div>
+
+              <ul className="flex flex-col gap-2.5">
+                {['Unlimited AI try-on generations', 'Any outfit on any person', 'High-quality results'].map(feat => (
+                  <li key={feat} className="flex items-center gap-2.5 text-sm text-gray-300">
+                    <IconCheck size={14} className="text-indigo-400 shrink-0" strokeWidth={3} />
+                    {feat}
+                  </li>
+                ))}
+              </ul>
+
+              {busy ? (
+                <div className="flex flex-col items-center gap-3 py-3">
+                  <IconLoader size={24} className="text-indigo-400" />
+                  <p className="text-sm text-gray-400">
+                    {checking ? 'Checking subscription…' : 'Activating your subscription…'}
+                  </p>
+                </div>
+              ) : (
+                <a
+                  href={paymentUrl}
+                  className="w-full py-3 rounded-xl font-semibold text-sm tracking-wide flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 shadow-lg shadow-indigo-500/25 transition-all duration-200"
+                >
+                  <IconCreditCard size={15} />
+                  Subscribe for $9.99/month
+                </a>
+              )}
+
+              {error && (
+                <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/20 rounded-xl px-3.5 py-2.5">
+                  <IconAlert size={14} className="text-red-400 mt-0.5 shrink-0" />
+                  <p className="text-xs text-red-400 leading-relaxed">{error}</p>
+                </div>
+              )}
+
+              {!busy && (
+                <button
+                  onClick={pollStatus}
+                  className="text-xs text-gray-600 hover:text-gray-400 transition-colors text-center"
+                >
+                  Already paid? Check subscription status
+                </button>
+              )}
+            </div>
+
+            <p className="text-center text-xs text-gray-500 mt-5">
+              Signed in as {session.user.email} ·{' '}
+              <button
+                onClick={() => supabaseClient.auth.signOut()}
+                className="text-indigo-400 hover:text-indigo-300 transition-colors"
+              >
+                Sign out
               </button>
             </p>
           </div>
@@ -335,9 +485,10 @@
 
     /* ── App ──────────────────────────────────────────────────────────────── */
     function App() {
-      const [session,        setSession]        = useState(null);
-      const [authView,       setAuthView]       = useState('login');
-      const [sessionLoading, setSessionLoading] = useState(true);
+      const [session,            setSession]            = useState(null);
+      const [authView,           setAuthView]           = useState('login');
+      const [sessionLoading,     setSessionLoading]     = useState(true);
+      const [subscriptionStatus, setSubscriptionStatus] = useState(null); // null | 'active' | 'inactive'
 
       const [image1,      setImage1]      = useState(null);
       const [image2,      setImage2]      = useState(null);
@@ -349,16 +500,36 @@
 
       const canGenerate = image1 !== null && image2 !== null && !isLoading;
 
+      const checkSubscription = useCallback(async (currentSession) => {
+        if (!currentSession) { setSubscriptionStatus(null); return; }
+        try {
+          const { data } = await supabaseClient
+            .from('user_subscriptions')
+            .select('subscription_status')
+            .eq('user_id', currentSession.user.id)
+            .single();
+          const s = data?.subscription_status;
+          setSubscriptionStatus(s === 'active' || s === 'trialing' ? 'active' : 'inactive');
+        } catch (_) {
+          setSubscriptionStatus('inactive');
+        }
+      }, []);
+
       useEffect(() => {
         supabaseClient.auth.getSession().then(({ data: { session } }) => {
           setSession(session);
           setSessionLoading(false);
+          checkSubscription(session);
         });
         const { data: { subscription } } = supabaseClient.auth.onAuthStateChange(
-          (_event, session) => { setSession(session); }
+          (_event, session) => {
+            setSession(session);
+            if (session) checkSubscription(session);
+            else setSubscriptionStatus(null);
+          }
         );
         return () => subscription.unsubscribe();
-      }, []);
+      }, [checkSubscription]);
 
       const handleFile1 = useCallback((file) => {
         if (preview1) URL.revokeObjectURL(preview1);
@@ -385,10 +556,9 @@
         setResultImage(null);
       }, [resultImage]);
 
-      const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB per image
+      const MAX_FILE_BYTES = 10 * 1024 * 1024;
 
       const handleGenerate = async () => {
-        // Client-side size guard before sending anything
         if (image1.size > MAX_FILE_BYTES || image2.size > MAX_FILE_BYTES) {
           setError('Each image must be under 10 MB.');
           return;
@@ -403,7 +573,12 @@
         formData.append('image2', image2);
 
         try {
-          const response = await fetch('/generate', { method: 'POST', body: formData });
+          const { data: { session: authSession } } = await supabaseClient.auth.getSession();
+          const response = await fetch('/generate', {
+            method: 'POST',
+            headers: authSession ? { 'Authorization': `Bearer ${authSession.access_token}` } : {},
+            body: formData
+          });
           if (!response.ok) {
             let msg = 'Server error: ' + response.status;
             try { const j = await response.json(); msg = j.error || msg; } catch (_) {}
@@ -420,7 +595,7 @@
         }
       };
 
-      if (sessionLoading) {
+      if (sessionLoading || (session && subscriptionStatus === null)) {
         return (
           <div className="min-h-screen bg-gray-950 flex items-center justify-center">
             <IconLoader size={32} className="text-indigo-400" />
@@ -429,6 +604,9 @@
       }
       if (!session) {
         return <AuthForm view={authView} onViewChange={setAuthView} />;
+      }
+      if (subscriptionStatus === 'inactive') {
+        return <PaymentWall session={session} onActivated={() => checkSubscription(session)} />;
       }
 
       return (
